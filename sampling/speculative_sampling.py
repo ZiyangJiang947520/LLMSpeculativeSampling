@@ -183,3 +183,36 @@ def speculative_sampling_v2(prefix : torch.Tensor, approx_model : torch.nn.Modul
 
     return prefix
 
+
+@torch.no_grad()
+def optimized_speculative_sampling(prefix: torch.Tensor, approx_model: torch.nn.Module, target_model: torch.nn.Module,
+                                   max_len: int, gamma: int = 4, temperature: float = 1, top_k: int = 0, top_p: float = 0,
+                                   verbose: bool = False) -> torch.Tensor:
+    """
+    Optimized Speculative Sampling with KV Cache alignment and pruning.
+    """
+    approx_model_cache = KVCacheModel(approx_model, temperature, top_k, top_p)
+    target_model_cache = KVCacheModel(target_model, temperature, top_k, top_p)
+    seq_len = prefix.shape[1]
+    T = seq_len + max_len
+
+    while prefix.shape[1] < T:
+        # Step 1: Generate with the approx model
+        approx_outputs = approx_model_cache.generate(prefix, gamma)
+        
+        # Extract attention scores from the approx model for pruning
+        approx_attention_scores = approx_outputs.attentions[-1]  # Ensure attention scores are returned
+        
+        # Step 2: Generate with the target model
+        target_outputs = target_model_cache.generate(prefix, gamma)
+        
+        # Extract attention scores from the target model for pruning
+        target_attention_scores = target_outputs.attentions[-1]
+        
+        # Step 3: Align and prune KV cache in target model
+        target_model_cache.align_and_prune_kv(approx_attention_scores, target_attention_scores, threshold=0.1)
+        
+        # Step 4: Use generated tokens from approx model for further processing
+        prefix = torch.cat((prefix, approx_outputs), dim=1)  # Ensure approx_outputs contains tokens
+
+    return prefix

@@ -22,6 +22,37 @@ class KVCacheModel():
         self._top_k = top_k
         self._top_p = top_p
 
+
+    def selective_prune_kv(self, attention_scores, threshold: float):
+            """
+            Prune KV cache based on attention scores.
+            
+            Args:
+                attention_scores (torch.Tensor): Attention scores of the elements in the KV cache.
+                threshold (float): Threshold below which KV elements will be pruned.
+            """
+            pruned_past_key_values = []
+            for i, (k, v) in enumerate(self._past_key_values):
+                # Assuming attention_scores has the same dimensions as k for selection purposes
+                mask = attention_scores[i] > threshold
+                k_pruned = k[:, :, mask, :]
+                v_pruned = v[:, :, mask, :]
+                pruned_past_key_values.append((k_pruned, v_pruned))
+            self._past_key_values = pruned_past_key_values
+            
+            
+    def align_and_prune_kv(self, approx_attention_scores, target_attention_scores, threshold=0.1):
+        # Implement pruning logic based on attention scores
+        # Example: Prune KV entries where attention scores are below the threshold
+        pruned_kv = []
+        for idx, (approx_score, target_score) in enumerate(zip(approx_attention_scores, target_attention_scores)):
+            if target_score.mean() < threshold:
+                continue  # Skip or prune low-attention elements
+            pruned_kv.append(self._past_key_values[idx])  # Keep only high-attention elements
+        self._past_key_values = pruned_kv
+
+        
+        
     def _forward_with_kvcache(self, input_ids : torch.Tensor, use_debug = True) -> torch.Tensor:
         if self._past_key_values is None:
             assert self._prob_history is None, f"{self._prob_history.shape}"
@@ -60,6 +91,10 @@ class KVCacheModel():
             
             last_q = not_cached_q[:, -1, :]
             self._past_key_values = outputs.past_key_values
+            # Apply selective pruning based on attention scores
+            if hasattr(outputs, 'attentions'):
+                attention_scores = outputs.attentions[-1]  # Hypothetical attention scores from model
+                self.selective_prune_kv(attention_scores, threshold=0.1)  # Adjust threshold as needed
         
         return last_q
 
